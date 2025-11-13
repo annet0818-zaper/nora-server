@@ -12,7 +12,7 @@ const app = express();
 app.use(express.json({ limit: "200kb" }));
 
 const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || "127.0.0.1";
+const HOST = process.env.HOST || "0.0.0.0";
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS || "*";
 
 const MENU_PDF_URL = process.env.MENU_PDF_URL || "https://clubprovocateur.ru/wp-content/uploads/2025/01/menu_22-01-24.pdf";
