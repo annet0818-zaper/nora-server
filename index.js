@@ -81,7 +81,7 @@ app.post("/chat", async (req, res) => {
 
     // Параметры LLM
     const USE_OPENAI = process.env.USE_OPENAI !== "false"; // по умолчанию true
-    const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1";
+    const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
     // Попытка ответа через OpenAI
     let reply = "";
