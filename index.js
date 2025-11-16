@@ -26,22 +26,16 @@ const CRAZY_PDF_URL =
   "https://clubprovocateur.ru/wp-content/uploads/2025/01/crazy_2024.pdf";
 
 /**
- * CORS под Tilda / превью / боевой домен
+ * CORS — разрешаем запросы с любого домена (под Tilda и боевой сайт)
  */
 app.use((req, res, next) => {
   const origin = req.headers.origin;
 
-  if (ALLOWED_ORIGINS === "*") {
-    if (origin) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-    }
-  } else if (origin) {
-    const allowed = ALLOWED_ORIGINS.split(",")
-      .map((o) => o.trim())
-      .filter(Boolean);
-    if (allowed.includes(origin)) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-    }
+  // Всегда разрешаем origin, который пришёл от браузера
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  } else {
+    res.setHeader("Access-Control-Allow-Origin", "*");
   }
 
   res.setHeader(
@@ -57,6 +51,7 @@ app.use((req, res, next) => {
 
   next();
 });
+
 
 /**
  * Загрузка меню из menu.json
