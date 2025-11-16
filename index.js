@@ -420,3 +420,4 @@ loadMenu()
     console.error("Failed to start server due to menu load error:", err);
     process.exit(1);
   });
+
