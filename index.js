@@ -403,6 +403,71 @@ app.post("/chat", async (req, res) => {
 /**
  * Старт сервера после загрузки меню
  */
+// ===== Make proxy endpoint (Tilda -> Server -> Make) =====
+app.post("/api/chat", async (req, res) => {
+  try {
+    const { message, isNewSession = false, sessionId } = req.body || {};
+
+    if (!message || typeof message !== "string") {
+      return res.status(400).json({ error: "message is required (string)" });
+    }
+    if (!sessionId || typeof sessionId !== "string") {
+      return res.status(400).json({ error: "sessionId is required (string)" });
+    }
+
+    const makeUrl = process.env.MAKE_WEBHOOK_URL;
+    const makeKey = process.env.MAKE_API_KEY;
+
+    if (!makeUrl || !makeKey) {
+      return res.status(500).json({ error: "MAKE_WEBHOOK_URL / MAKE_API_KEY not set" });
+    }
+
+    // Таймаут, чтобы запрос не зависал (важно для стабильности)
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 15000); // 15 сек
+
+    const r = await fetch(makeUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-make-apikey": makeKey,
+      },
+      body: JSON.stringify({ message, isNewSession, sessionId }),
+      signal: controller.signal,
+    }).finally(() => clearTimeout(t));
+
+    const text = await r.text();
+
+    // Make должен вернуть JSON-строку. Парсим её и отдаём клиенту.
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      return res.status(502).json({
+        error: "Make returned non-JSON",
+        status: r.status,
+        raw: text,
+      });
+    }
+
+    // Опционально: добавим ссылки на PDF из env, если Make попросил
+    if (data.sendPdf === "menu" || data.sendPdf === "both") {
+      data.menuPdfUrl = process.env.MENU_PDF_URL;
+    }
+    if (data.sendPdf === "crazy" || data.sendPdf === "both") {
+      data.crazyPdfUrl = process.env.CRAZY_PDF_URL;
+    }
+
+    return res.status(200).json(data);
+  } catch (err) {
+    // Если сработал AbortController
+    if (String(err).includes("AbortError")) {
+      return res.status(504).json({ error: "Timeout calling Make" });
+    }
+    return res.status(500).json({ error: "Server error", details: String(err) });
+  }
+});
+
 loadMenu()
   .then(() => {
     app.listen(PORT, HOST, () => {
