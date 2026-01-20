@@ -1,6 +1,133 @@
 {
-  "items": [
-    {"category":"ГОРЯЧИЕ ЗАКУСКИ","name":"Креветки гриль с томатным соусом ","price":"1650 ₽"},
-    {"category":"СУШИ","name":"Калифорния с лососем или угрем","price":"900 ₽"}
+  "meta": {
+    "source": "menu_22-01-24.pdf",
+    "currency": "RUB"
+  },
+  "food": [
+    {
+      "category": "ХОЛОДНЫЕ ЗАКУСКИ",
+      "items": [
+        {
+          "name": "Плато брускетт",
+          "desc": "2 вида семги и 2 ростбифа",
+          "weightOrVolume": "540 г",
+          "priceRub": 2900
+        },
+        {
+          "name": "Сырное плато с медом и орехами",
+          "weightOrVolume": "250 г",
+          "priceRub": 1200
+        },
+        {
+          "name": "Мясное плато",
+          "desc": "хамон, ростбиф, мясной деликатес, говядина копченая",
+          "weightOrVolume": "500/50/50 г",
+          "priceRub": 1900
+        },
+        {
+          "name": "Лосось пряного посола с тостами",
+          "weightOrVolume": "250 г",
+          "priceRub": 1450
+        }
+      ]
+    },
+    {
+      "category": "САЛАТЫ",
+      "items": [
+        { "name": "Овощная тарелка", "weightOrVolume": "200 г", "priceRub": 900 },
+        { "name": "Греческий", "weightOrVolume": "200 г", "priceRub": 750 },
+        { "name": "Цезарь с курицей", "weightOrVolume": "200 г", "priceRub": 750 },
+        { "name": "Цезарь с креветками", "weightOrVolume": "200 г", "priceRub": 850 },
+        {
+          "name": "Теплый салат с лососем и кешью",
+          "weightOrVolume": "250 г",
+          "priceRub": 950
+        }
+      ]
+    },
+    {
+      "category": "ГАРНИРЫ",
+      "items": [
+        { "name": "Брокколи на пару", "weightOrVolume": "200 г", "priceRub": 350 },
+        { "name": "Овощи гриль", "weightOrVolume": "250 г", "priceRub": 550 }
+      ]
+    },
+    {
+      "category": "ДЕСЕРТЫ",
+      "items": [
+        { "name": "Чизкейк", "weightOrVolume": "150 г", "priceRub": 550 },
+        { "name": "Фруктовая ваза", "weightOrVolume": "1000 г", "priceRub": 900 },
+        {
+          "name": "Мороженое (3 шарика: ваниль/шоколад/клубника)",
+          "weightOrVolume": "200 г",
+          "priceRub": 300
+        }
+      ]
+    },
+    {
+      "category": "ГОРЯЧИЕ ЗАКУСКИ",
+      "items": [
+        { "name": "Куриные стрипсы в панировке", "weightOrVolume": "220 г", "priceRub": 850 },
+        { "name": "Креветки в панировке + сладкий чили", "weightOrVolume": "220 г", "priceRub": 1550 },
+        { "name": "Креветки темпура + соус унаги", "weightOrVolume": "210 г", "priceRub": 1250 },
+        { "name": "Пивная тарелка", "weightOrVolume": "800 г", "priceRub": 2400 },
+        { "name": "Куриные крылья", "weightOrVolume": "300 г", "priceRub": 650 },
+        { "name": "Мидии запечённые (пармезан)", "weightOrVolume": "300 г", "priceRub": 1650 },
+        { "name": "Мидии запечённые (дор блю)", "weightOrVolume": "300 г", "priceRub": 1650 },
+        {
+          "name": "Паста с телятиной",
+          "desc": "сливки, бульон, лук, чеснок, пармезан, вяленый томат",
+          "weightOrVolume": null,
+          "priceRub": null,
+          "priceOptionsRub": [950, 1150]
+        },
+        {
+          "name": "Паста с креветками",
+          "desc": "сливки, бульон, лук, чеснок, пармезан, вяленый томат",
+          "weightOrVolume": null,
+          "priceRub": null,
+          "priceOptionsRub": [950, 1150]
+        }
+      ]
+    },
+    {
+      "category": "СУПЫ",
+      "items": [
+        { "name": "Куриный суп", "weightOrVolume": "450 г", "priceRub": 450 },
+        { "name": "Том Ям с морепродуктами", "weightOrVolume": "450 г", "priceRub": 950 }
+      ]
+    },
+    {
+      "category": "РОЛЛЫ",
+      "items": [
+        { "name": "Дракон", "desc": "угорь, краб, сыр филадельфия, тобико", "weightOrVolume": "250 г", "priceRub": 900 },
+        { "name": "Филадельфия", "weightOrVolume": "250 г", "priceRub": 900 },
+        { "name": "Калифорния с лососем", "weightOrVolume": "250 г", "priceRub": 900 },
+        { "name": "Калифорния с угрем", "weightOrVolume": "250 г", "priceRub": 900 },
+        { "name": "Нери", "desc": "лосось, авокадо, угорь, тобико, салат чука", "weightOrVolume": "250 г", "priceRub": 900 }
+      ]
+    }
+  ],
+  "bar": [
+    {
+      "category": "ВОДКА",
+      "items": [
+        { "name": "Beluga Noble", "weightOrVolume": "40 мл", "priceRub": 550 },
+        { "name": "Beluga Gold", "weightOrVolume": "40 мл", "priceRub": 1200 },
+        { "name": "Grey Goose", "weightOrVolume": "40 мл", "priceRub": 750 },
+        { "name": "Talka", "weightOrVolume": "40 мл", "priceRub": 350 },
+        { "name": "Mamont", "weightOrVolume": "40 мл", "priceRub": 550 },
+        { "name": "Finlandia", "weightOrVolume": "40 мл", "priceRub": 450 },
+        { "name": "Absolut", "weightOrVolume": "40 мл", "priceRub": 450 }
+      ]
+    },
+    {
+      "category": "ДЖИН",
+      "items": [
+        { "name": "Bombay Sapphire", "weightOrVolume": "40 мл", "priceRub": 500 },
+        { "name": "Gordon’s", "weightOrVolume": "40 мл", "priceRub": 450 },
+        { "name": "Hendrick’s", "weightOrVolume": "40 мл", "priceRub": 650 }
+      ]
+    }
   ]
 }
