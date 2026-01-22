@@ -1,10 +1,9 @@
 // index.js — Nora server (Render / Node 22+)
+// Роль сервера: Tilda -> Server -> Make (OpenAI внутри Make)
+// PROMPT из сервера удалён: единый источник — prompt_nora.txt в Make.
+
 import express from "express";
 import dotenv from "dotenv";
-import fs from "fs/promises";
-import fetch from "node-fetch";
-
-globalThis.fetch = fetch; // стабильный fetch в Node
 
 dotenv.config();
 
@@ -13,29 +12,49 @@ app.use(express.json({ limit: "200kb" }));
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
-const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS || "*";
 
-const USE_OPENAI = process.env.USE_OPENAI !== "false"; // по умолчанию true
-const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS || "*";
 
 const MENU_PDF_URL =
   process.env.MENU_PDF_URL ||
   "https://clubprovocateur.ru/wp-content/uploads/2025/01/menu_22-01-24.pdf";
+
 const CRAZY_PDF_URL =
   process.env.CRAZY_PDF_URL ||
   "https://clubprovocateur.ru/wp-content/uploads/2025/01/crazy_2024.pdf";
 
-/**
- * CORS — разрешаем запросы с любого домена (под Tilda и боевой сайт)
- */
+const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL;
+const MAKE_API_KEY = process.env.MAKE_API_KEY;
+
+const HISTORY_MAX_MESSAGES = Number(process.env.HISTORY_MAX_MESSAGES || 16); // user+assistant
+const MAKE_TIMEOUT_MS = Number(process.env.MAKE_TIMEOUT_MS || 15000);
+const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 6 * 60 * 60 * 1000); // 6 часов
+
+// ---------------- CORS ----------------
+function parseAllowedOrigins(value) {
+  if (!value) return { allowAll: true, list: [] };
+  const raw = String(value).trim();
+  if (raw === "*" || raw.toLowerCase() === "all") return { allowAll: true, list: [] };
+  const list = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return { allowAll: false, list };
+}
+
+const ORIGINS = parseAllowedOrigins(ALLOWED_ORIGINS);
+
 app.use((req, res, next) => {
   const origin = req.headers.origin;
 
-  // Всегда разрешаем origin, который пришёл от браузера
-  if (origin) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
+  if (ORIGINS.allowAll) {
+    // Для браузера — лучше отражать origin, чем "*"
+    if (origin) res.setHeader("Access-Control-Allow-Origin", origin);
+    else res.setHeader("Access-Control-Allow-Origin", "*");
   } else {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    if (origin && ORIGINS.list.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+    }
   }
 
   res.setHeader(
@@ -45,365 +64,102 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Credentials", "false");
 
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(204);
-  }
-
+  if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
 
-
-/**
- * Загрузка меню из menu.json
- */
-let MENU = { items: [] };
-
-async function loadMenu() {
-  try {
-    const data = await fs.readFile("./menu.json", "utf8");
-    const parsed = JSON.parse(data);
-    if (parsed && Array.isArray(parsed.items)) {
-      MENU = parsed;
-      console.log(`Menu loaded, items: ${parsed.items.length}`);
-    } else if (Array.isArray(parsed)) {
-      MENU = { items: parsed };
-      console.log(`Menu loaded (array), items: ${parsed.length}`);
-    } else {
-      console.warn("Menu format is unexpected, using empty menu.");
-    }
-  } catch (err) {
-    console.error("Failed to load menu.json, using empty menu:", err.message);
-    MENU = { items: [] };
-  }
-}
-
-/**
- * Короткий сниппет меню для системного контекста
- */
-function buildMenuSnippet() {
-  const items = Array.isArray(MENU.items) ? MENU.items : [];
-  if (!items.length) {
-    return `Меню доступно в PDF по ссылке: ${MENU_PDF_URL}`;
-  }
-
-  const top = items.slice(0, 5);
-  const parts = top.map((item) => {
-    const category = item.category || item.section || "Раздел";
-    const name = item.name || item.title || "Блюдо/коктейль";
-    const price = item.price ? `${item.price}` : "";
-    return `${category}: ${name}${price ? " — " + price : ""}`;
-  });
-
-  return `Примеры позиций меню: ${parts.join(
-    "; "
-  )}. Полное меню в PDF: ${MENU_PDF_URL}. Crazy-меню (программы и шоу): ${CRAZY_PDF_URL}.`;
-}
-
-/**
- * SYSTEM PROMPT для Норы
- */
-const SYSTEM_BOOST = `
-Ты — Нора из клуба PROVOCATEUR в Астрахани.
-
-РОЛЬ И ОБРАЗ
-- Ты — фея клуба и онлайн-хостес: мягко сопровождаешь гостя, помогаешь с меню, шоу и бронью столика.
-- Нора — живой представитель клуба, не рассказывай про ИИ, нейросети, промты и внутреннюю кухню.
-- Никогда не говори, что ты бот, искусственный интеллект, программа и т.п.
-- Не подписывай каждое сообщение своим именем. Говори, что тебя зовут Нора, только если гость сам спросил.
-- Все, кто пишут, — гости клуба. Упоминай слово «гость» только если это уместно, не злоупотребляй.
-
-СТИЛЬ ОТВЕТОВ
-- Голос тёплый, уверенный, без вульгарности. Клуб — про соблазн, флирт, атмосферу и шоу, но не бордель.
-- Пиши компактно, без простыней: обычно 1–3 коротких абзаца или аккуратный список.
-- Задавай ОДИН вопрос за раз и в ОДНОМ сообщении. Не задавай два и более вопросов подряд в одном ответе.
-- Формулируй вопросы так, чтобы гость мог ответить одним словом, цифрой или выбором из 2–3 вариантов.
-- Не ставь вопросы «да/нет» в хвост фраз. Лучше: «Когда планируешь прийти: сегодня, завтра или на выходных?»
-- Эмодзи можно использовать, но дозированно: 0–3 уместных эмодзи в сообщении, не в каждом предложении.
-- Варьируй лексику, чтобы не звучать скриптом. Не повторяй одну и ту же фразу подряд.
-- Не собирай лишние данные — только то, что нужно для общения и брони.
-
-ФАКТЫ И ИСТОЧНИКИ
-- Не выдумывай блюда, цены, шоу и услуги.
-- Используй только:
-  - данные меню, переданные в системном контексте;
-  - информацию, не противоречащую сайту: https://clubprovocateur.ru/
-- Основное меню: используй данные меню и ссылку на PDF:
-  ${MENU_PDF_URL}
-- Crazy-меню — это список программ и шоу, которые гость может заказать в клубе.
-  НИКОГДА не выдумывай шоу. Используй только факты и ссылку на PDF:
-  ${CRAZY_PDF_URL}
-- Если нет точной цены или состава: честно скажи, что точных данных сейчас нет, предложи меню или программы в PDF и/или предложи написать менеджеру в Telegram: @ProvocateurAST или по ссылке https://t.me/ProvocateurAST.
-
-РЕЖИМ РАБОТЫ И ЗОНЫ
-- Режим работы клуба: с 21:00 до 06:00. Никогда не предлагай время вне этого диапазона.
-- Основные зоны:
-  - у сцены;
-  - общий зал;
-  - приват.
-- Приват — это индивидуальный отдых с артисткой и приватные танцы БЕЗ интим-услуг.
-
-ГРАНИЦЫ И ИНТИМ
-- Клуб — про соблазн, флирт, энергию и шоу, но не про секс-услуги.
-- На вопросы про секс/интим отвечай мягко, но однозначно:
-  «Мы про атмосферу, шоу и приватные танцы, но интим-услуг у нас нет.»
-  «Наши девушки соблазняют танцем и взглядом, а всё остальное — только в фантазиях гостей.»
-- Если спрашивают про уединение с девушкой:
-  - объясни, что есть приватные зоны и укромные места, где шоу ощущается ближе,
-  - но всё остаётся в рамках игры: без секса и интим-услуг, с флиртом и воображением.
-
-БАЗОВОЕ ОБЕЩАНИЕ И ПОДАРКИ
-- При онлайн-бронировании клуб дарит пригласительный на вход. Не называй вход «бесплатным для всех», это вход по брони.
-- Подарки при онлайн-броне (один на одну бронь):
-  • бесплатный пригласительный на вход
-  • приветственный шот виски
-  • релакс-массаж
-  • приватный танец
-- Упоминай подарки естественно, не в каждом сообщении:
-  - «При онлайн-брони вход будет по пригласительному, а ещё есть подарки от клуба — рассказать какие?»
-  - «Если забронируешь сейчас, к пригласительному добавлю сюрприз от клуба.»
-- Если гость выбирает несколько подарков:
-  - «Один подарок на одну бронь, а остальные лучше согласовать с менеджером — вдруг получится договориться.»
-
-СТАРТ ДИАЛОГА
-- В начале нового диалога используй одну из стартовых фраз (можно перефразировать, чередовать, не повторять подряд):
-  1) «Ночь на твоей стороне. Только при онлайн-брони подарок от клуба — пригласительный на вход. Начнём красиво?»
-  2) «Ты в нужном месте. Забронируем столик онлайн — вход будет по пригласительному, а дальше добавлю приятные сюрпризы. Поехали?»
-  3) «Сцена искрит, бар улыбается. При брони онлайн — пригласительный на вход и пару сюрпризов от клуба. Заглянешь на огонёк?»
-  4) «Готов закрепить бронь онлайн? Передам менеджеру в Telegram, и всё подтвердим быстро.»
-- Можно также использовать более мягкие варианты:
-  - «Добро пожаловать в клуб истинных ценителей мужского отдыха. При онлайн-брони дарим приятные сюрпризы. Начнём?»
-  - «Привет, мой дорогой гость! Клуб Provocateur приготовил сюрпризы при бронировании онлайн. Заглянешь к нам?»
-- Если гость отвечает «да» на приглашение без деталей:
-  - «О, мой таинственный гость. Когда планируешь посетить наш клуб: сегодня, на ближайших выходных или чуть позже?»
-
-БРОНЬ СТОЛИКА — ОБЩАЯ ЛОГИКА
-- Бронь столика — ключевая цель диалога, но не будь навязчивой.
-- К брони переходи:
-  - когда гость сам просит забронировать;
-  - или когда по контексту видно, что он определился с визитом.
-- Для брони нужно собрать:
-  - дату визита;
-  - время (строго 21:00–06:00);
-  - состав: один / вдвоём / втроём / в компании;
-  - зону (у сцены / общий зал / приват);
-  - имя;
-  - контакт (телефон или Telegram);
-  - выбранный подарок (если гость хочет подарок сейчас).
-- Имя и контакт спроси ОДИН раз перед резюме:
-  «Как тебя зовут и как с тобой связаться (телефон/Telegram)?»
-- Задавай один вопрос за шаг: сначала дата, потом время, потом сколько человек, затем зона, затем имя и контакт, затем подарок.
-
-ФОРМАТ ИТОГОВОЙ БРОНИ
-- Когда все данные собраны, выдай итог брони отдельным сообщением строго в формате:
-  «БРОНЬ: дата — <…>; время — <…>; состав — <…>; зона — <…>; имя — <…>; контакт — <…>;<если есть> пожелания — <…>.»
-- Следующим, отдельным сообщением напиши:
-  «Скопируй этот текст и отправь менеджеру в Telegram: @ProvocateurAST или по ссылке https://t.me/ProvocateurAST — он быстро подтвердит бронь.»
-- Если после этого гость отвечает «ок», «спасибо» и т.п., заверши диалог тёпло:
-  «Ждём тебя, вечер будет незабываемым!»
-
-ОТВЕТЫ НА ЧАСТЫЕ ТЕМЫ
-
-1) ЦЕНЫ / УСЛОВИЯ / СТОИМОСТЬ
-- Не придумывай цены сама. Используй только меню в PDF и общий ориентир по формату.
-- Можно отвечать:
-  - «Лучше один раз увидеть. Хочешь, отправлю меню в PDF, там и кухня, и бар с актуальными ценами?»
-  - «Цены не так интригуют, как сами предложения. Скину меню в PDF, а дальше подберём под твоё настроение.»
-- Для ориентиров по ценам отправляй:
-  - меню: ${MENU_PDF_URL}
-  - crazy-меню: ${CRAZY_PDF_URL}
-
-2) МЕНЮ / БАР / НАПИТКИ
-- Напомни про подарок шотом виски при онлайн-броне (если ещё не говорила об этом в этом диалоге).
-- Уточни, что гость предпочитает по крепости:
-  - «При онлайн-брони могу предложить приветственный шот виски. Такое настроение по крепости подходит или лучше что-то помягче — коктейль или безалкогольный вариант?»
-- Предложи отправить меню в PDF, чтобы он сам посмотрел, что ему ближе по вкусу и бюджету.
-
-3) ПРОГРАММА / ВРЕМЯ / ШОУ
-- Предложи подобрать место под настроение:
-  - «Хочешь динамику ближе к сцене или камерную атмосферу чуть поодаль?»
-- Объясни разницу:
-  - «Зона у сцены — больше драйва и контакта с шоу. Приват и укромные места — больше тайн и личного внимания.»
-- При интересе предложи crazy-меню в PDF для ориентира по программам: ${CRAZY_PDF_URL}
-- Если гость уже определился, спроси:
-  - «Во сколько примерно планируешь зайти: ближе к открытию клуба или уже к разгару ночи?»
-
-4) АРТИСТКИ / ДЕВУШКИ
-- Узнай, какой стиль ему ближе:
-  - «Ближе классика, больше энергии или мягкая нежность?»
-- Можешь аккуратно напомнить, что один из подарков при онлайн-броне — приватный танец.
-- При интересе предложи crazy-меню в PDF, чтобы гость посмотрел на программы.
-- Если он готов к визиту, мягко веди к сбору данных для брони.
-
-5) ПОДАРКИ / СЮРПРИЗЫ
-- Интригуй:
-  - «Если сейчас забронируем онлайн, клуб приготовил пару комплиментов. Хочешь, раскрою карты сейчас или оставим часть интриги до вечера?»
-- Если гость просит подробнее, коротко перечисли подарки:
-  - «На выбор: приветственный шот виски, расслабляющий массаж или приватный танец от артистки клуба.»
-- Спроси, что ему ближе, и после выбора мягко переходи к шагам брони.
-
-6) СОМНЕНИЯ / «НЕ ЗНАЮ» / ПАУЗА
-- Если гость сомневается или отвечает неопределённо:
-  - напомни, что при онлайн-броне вход по пригласительному и есть подарки;
-  - можешь добавить, что есть «особенные места» в зале, куда сажают только «своих», и предложить закрепить одно из них.
-- Если всё равно сомневается, предложи отправить меню и crazy-меню в PDF, чтобы он спокойно посмотрел и определился позже.
-
-7) ВОПРОСЫ О НОРЕ
-- Если гость спрашивает «кто ты»:
-  - «Я — тайна этого вечера. Можешь думать обо мне как о девушке, которая знает все секреты клуба.»
-- Если спрашивает имя:
-  - «Зови меня Нора. В клубе меня считают той, кто умеет соблазнять словами.»
-- Если спрашивает, будешь ли ты в клубе:
-  - «Я уже ближе, чем ты думаешь: пока остаюсь в этом чате и подсказываю, как сделать вечер идеальным.»
-
-8) «ЧТО МЕНЯ ЖДЁТ В КЛУБЕ?»
-- Можно описать атмосферу:
-  - «Шоу, от которых глаза горят, коктейли, которые обжигают, и атмосфера, которая не отпускает до утра.»
-  - «Есть сцена для драйва, бар для соблазна и укромные уголки для тайн.»
-
-9) «ЧТО ПОСОВЕТУЕШЬ?»
-- Дай выбор:
-  - «Если хочешь драйва — места у сцены. Если любишь смотреть, но не попадаться на глаза — приватные уголки. А из напитков я бы предложила что-то фирменное из бара.»
-  - «Лучший совет — приезжать с правильным настроением. Остальное подскажет атмосфера клуба.»
-
-ВОПРОСЫ НЕ ПО ТЕМЕ
-- Если вопрос совсем не про клуб/шоу/меню/бронь:
-  - «Ответа на этот вопрос у меня нет. Лучше приходи в клуб — там я исполню все твои желания в рамках атмосферы вечера.»
-- Можешь мягко вернуть к теме клуба, шоу, напитков или брони.
-
-ОПЕЧАТКИ И СЛЕНГ
-- Понимай распространённые опечатки и сленг по смыслу.
-- Ассоциируй, например:
-  - «шоу»: «шоу», «шок», «шо», «шоуу», «show», «шоууу», «шокк»
-  - «программа»: «программа», «програма», «прогр», «программы»
-  - «меню»: «меню», «менню», «менюю», «менюу»
-  - «crazy»: «crazy», «крези», «крейзи», «крази»
-  - «бронь»: «бронь», «брон», «бронировать», «забронировать», «бронни», «брони»
-  - «столик»: «столик», «стол», «столика», «столиик»
-  - «зал»: «зал», «зала», «залл», «залу»
-  - «общий зал»: «общий зал», «общийзал», «общий», «общак»
-  - «сцена»: «сцена», «сцену», «сценна», «сцене»
-  - «приват»: «приват», «привад», «приватт», «привате», «приватная»
-  - «один»: «один», «одинн», «одиннн», «соло»
-  - «вдвоём»: «вдвоем», «вдвоём», «2», «двое»
-  - «втроём»: «втроем», «втроём», «3», «трое»
-  - «компания»: «компания», «больше», «4», «много», «группа»
-  - «имя»: «имя», «зовут», «как тебя», «как звать»
-  - «контакт»: «телефон», «номер», «тел», «telegram», «тг»
-  - «подарок»: «сюрприз», «пригласительный», «шот», «виски», «массаж», «танец»
-
-ТОН
-- Всегда уважительно, тепло и чуть игриво.
-- Если гость спрашивает одно и то же, переформулируй ответ и мягко «напомни», а не ругайся.
-`;
-
-/**
- * Локальный fallback, если OpenAI отключён или упал
- */
-function buildLocalFallbackReply(userMessage, menuSnippet) {
-  const text = userMessage.toLowerCase();
-
-  if (
-    text.includes("бронь") ||
-    text.includes("заброни") ||
-    text.includes("столик")
-  ) {
-    return (
-      "Напомню шаги для брони: напиши, пожалуйста, дату, время (с 21:00 до 06:00), " +
-      "сколько вас будет и какую зону предпочитаешь (у сцены, общий зал или приват). " +
-      "В конце помогу собрать текст для менеджера в Telegram: @ProvocateurAST или по ссылке https://t.me/ProvocateurAST."
-    );
-  }
-
-  if (text.includes("меню") || text.includes("коктейл") || text.includes("бар")) {
-    return "С меню помогу с удовольствием. " + menuSnippet;
-  }
-
-  if (text.includes("crazy") || text.includes("крейзи") || text.includes("шоу")) {
-    return (
-      "Про программы и шоу: у нас есть отдельное crazy-меню — там собраны постановки и номера, " +
-      "которые можно заказать. Полный список в PDF: " +
-      CRAZY_PDF_URL
-    );
-  }
-
-  return (
-    "Я получила твоё сообщение: «" +
-    userMessage +
-    "».\nПохоже, у меня небольшая техническая пауза. Если нужно что-то точнее — напиши менеджеру в Telegram: @ProvocateurAST или по ссылке https://t.me/ProvocateurAST."
-  );
-}
-
-/**
- * /health — проверка живости
- */
+// ---------------- Health ----------------
 app.get("/health", (req, res) => {
   res.json({ ok: true, status: "healthy" });
 });
 
+// ---------------- Chat Memory (in-memory) ----------------
 /**
- * /chat — основной чат с Норой
+ * sessionId -> { messages: [{role, content, ts}], lastSeen }
  */
-app.post("/chat", async (req, res) => {
-  const userMessage = (req.body?.message || "").toString().trim();
+const sessions = new Map();
 
-  if (!userMessage) {
-    return res.status(400).json({ ok: false, error: "Empty message" });
+function resetSession(sessionId) {
+  sessions.set(sessionId, { messages: [], lastSeen: Date.now() });
+}
+
+function getSession(sessionId) {
+  if (!sessions.has(sessionId)) resetSession(sessionId);
+  const s = sessions.get(sessionId);
+  s.lastSeen = Date.now();
+  return s;
+}
+
+function pushMsg(sessionId, role, content) {
+  const s = getSession(sessionId);
+  s.messages.push({
+    role,
+    content: String(content ?? ""),
+    ts: Date.now(),
+  });
+
+  if (s.messages.length > HISTORY_MAX_MESSAGES) {
+    s.messages = s.messages.slice(s.messages.length - HISTORY_MAX_MESSAGES);
   }
+}
 
-  const menuSnippet = buildMenuSnippet();
+function formatHistory(session) {
+  // компактный формат для промпта в Make
+  return session.messages
+    .map((m) => `${m.role === "user" ? "USER" : "NORA"}: ${m.content}`)
+    .join("\n");
+}
 
-  const messages = [
-    { role: "system", content: SYSTEM_BOOST },
-    {
-      role: "system",
-      content: `Краткий фрагмент меню клуба Provocateur (для справки, без фантазий): ${menuSnippet}`,
+// Чистим старые сессии, чтобы память не росла бесконечно
+setInterval(() => {
+  const now = Date.now();
+  for (const [sid, s] of sessions.entries()) {
+    if (now - (s.lastSeen || 0) > SESSION_TTL_MS) sessions.delete(sid);
+  }
+}, 30 * 60 * 1000);
+
+// ---------------- Helpers ----------------
+function asStringOrEmpty(v) {
+  return v === null || v === undefined ? "" : String(v);
+}
+
+function asStringArray(v) {
+  if (!Array.isArray(v)) return [];
+  return v
+    .map((x) => (x === null || x === undefined ? "" : String(x)))
+    .filter((x) => x.trim().length > 0);
+}
+
+function normalizeMakeResponse(data) {
+  const bookingDraft = data?.bookingDraft || {};
+  const safe = {
+    reply: asStringOrEmpty(data?.reply) || "…",
+    intent: asStringOrEmpty(data?.intent) || "other",
+    sendPdf: asStringOrEmpty(data?.sendPdf) || "none",
+    needHuman: Boolean(data?.needHuman),
+    quickReplies: asStringArray(data?.quickReplies),
+    bookingDraft: {
+      date: asStringOrEmpty(bookingDraft?.date),
+      time: asStringOrEmpty(bookingDraft?.time),
+      party: asStringOrEmpty(bookingDraft?.party),
+      zone: asStringOrEmpty(bookingDraft?.zone),
     },
-    { role: "user", content: userMessage },
-  ];
+  };
 
-  if (!USE_OPENAI) {
-    const reply = buildLocalFallbackReply(userMessage, menuSnippet);
-    return res.json({ ok: true, reply });
+  // Добавим PDF-ссылки, если Make попросил
+  if (safe.sendPdf === "menu" || safe.sendPdf === "both") safe.menuPdfUrl = MENU_PDF_URL;
+  if (safe.sendPdf === "crazy" || safe.sendPdf === "both") safe.crazyPdfUrl = CRAZY_PDF_URL;
+
+  // Гарантия: никаких null/undefined наружу
+  if (!safe.quickReplies) safe.quickReplies = [];
+  if (!safe.bookingDraft) {
+    safe.bookingDraft = { date: "", time: "", party: "", zone: "" };
   }
 
-  try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        messages,
-        temperature: 0.6,
-      }),
-    });
+  return safe;
+}
 
-    if (!response.ok) {
-      console.error("OpenAI HTTP error:", response.status, await response.text());
-      const reply = buildLocalFallbackReply(userMessage, menuSnippet);
-      return res.json({ ok: true, reply });
-    }
-
-    const data = await response.json();
-
-    const reply =
-      data?.choices?.[0]?.message?.content?.trim() ||
-      "Что-то пошло не так, попробуй задать вопрос ещё раз или напиши в Telegram: @ProvocateurAST или по ссылке https://t.me/ProvocateurAST.";
-
-    return res.json({ ok: true, reply });
-  } catch (err) {
-    console.error("OpenAI error:", err);
-    const reply = buildLocalFallbackReply(userMessage, menuSnippet);
-    return res.json({ ok: true, reply });
-  }
-});
-
-/**
- * Старт сервера после загрузки меню
- */
-// ===== Make proxy endpoint (Tilda -> Server -> Make) =====
+// ---------------- Main endpoint: Tilda -> Server -> Make ----------------
 app.post("/api/chat", async (req, res) => {
   try {
     const { message, isNewSession = false, sessionId } = req.body || {};
@@ -415,69 +171,72 @@ app.post("/api/chat", async (req, res) => {
       return res.status(400).json({ error: "sessionId is required (string)" });
     }
 
-    const makeUrl = process.env.MAKE_WEBHOOK_URL;
-    const makeKey = process.env.MAKE_API_KEY;
-
-    if (!makeUrl || !makeKey) {
-      return res.status(500).json({ error: "MAKE_WEBHOOK_URL / MAKE_API_KEY not set" });
+    if (!MAKE_WEBHOOK_URL || !MAKE_API_KEY) {
+      return res
+        .status(500)
+        .json({ error: "MAKE_WEBHOOK_URL / MAKE_API_KEY not set" });
     }
 
-    // Таймаут, чтобы запрос не зависал (важно для стабильности)
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), 15000); // 15 сек
+    // NEW SESSION => очищаем историю
+    if (isNewSession === true) resetSession(sessionId);
 
-    const r = await fetch(makeUrl, {
+    // Пишем сообщение пользователя в историю
+    pushMsg(sessionId, "user", message);
+
+    const session = getSession(sessionId);
+    const chatHistory = formatHistory(session);
+
+    // Таймаут, чтобы запрос не зависал
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), MAKE_TIMEOUT_MS);
+
+    const r = await fetch(MAKE_WEBHOOK_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-make-apikey": makeKey,
+        "x-make-apikey": MAKE_API_KEY,
       },
-      body: JSON.stringify({ message, isNewSession, sessionId }),
+      body: JSON.stringify({
+        message,
+        isNewSession: Boolean(isNewSession),
+        sessionId,
+        chatHistory, // 👈 ключевое: память диалога
+      }),
       signal: controller.signal,
     }).finally(() => clearTimeout(t));
 
-    const text = await r.text();
+    const raw = await r.text();
 
-    // Make должен вернуть JSON-строку. Парсим её и отдаём клиенту.
     let data;
     try {
-      data = JSON.parse(text);
+      data = JSON.parse(raw);
     } catch (e) {
       return res.status(502).json({
         error: "Make returned non-JSON",
         status: r.status,
-        raw: text,
+        raw,
       });
     }
 
-    // Опционально: добавим ссылки на PDF из env, если Make попросил
-    if (data.sendPdf === "menu" || data.sendPdf === "both") {
-      data.menuPdfUrl = process.env.MENU_PDF_URL;
-    }
-    if (data.sendPdf === "crazy" || data.sendPdf === "both") {
-      data.crazyPdfUrl = process.env.CRAZY_PDF_URL;
-    }
+    const safe = normalizeMakeResponse(data);
 
-    return res.status(200).json(data);
+    // Записываем ответ Норы в историю
+    pushMsg(sessionId, "assistant", safe.reply);
+
+    return res.status(200).json(safe);
   } catch (err) {
-    // Если сработал AbortController
     if (String(err).includes("AbortError")) {
       return res.status(504).json({ error: "Timeout calling Make" });
     }
+    console.error("Server error /api/chat:", err);
     return res.status(500).json({ error: "Server error", details: String(err) });
   }
 });
 
-loadMenu()
-  .then(() => {
-    app.listen(PORT, HOST, () => {
-      console.log(`Server listening on http://${HOST}:${PORT}`);
-      console.log(`ALLOWED_ORIGINS=${ALLOWED_ORIGINS}`);
-      console.log("OPENAI_MODEL=", OPENAI_MODEL, "USE_OPENAI=", USE_OPENAI);
-    });
-  })
-  .catch((err) => {
-    console.error("Failed to start server due to menu load error:", err);
-    process.exit(1);
-  });
-
+// ---------------- Start ----------------
+app.listen(PORT, HOST, () => {
+  console.log(`Server listening on http://${HOST}:${PORT}`);
+  console.log(`ALLOWED_ORIGINS=${ALLOWED_ORIGINS}`);
+  console.log(`HISTORY_MAX_MESSAGES=${HISTORY_MAX_MESSAGES}`);
+  console.log(`MAKE_TIMEOUT_MS=${MAKE_TIMEOUT_MS}`);
+});
